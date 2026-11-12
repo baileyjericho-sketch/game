@@ -1,0 +1,787 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batman: Gotham Nights</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: #0a0a0f;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+      user-select: none;
+    }
+    h1 {
+      color: #f5c518;
+      text-shadow: 0 0 20px rgba(245, 197, 24, 0.5);
+      margin-bottom: 8px;
+      letter-spacing: 4px;
+      font-size: 1.8rem;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 16px;
+      font-size: 0.9rem;
+    }
+    #game {
+      background: #111;
+      border: 3px solid #333;
+      border-radius: 8px;
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.8), 0 0 80px rgba(245, 197, 24, 0.1);
+      max-width: 100%;
+      cursor: none;
+    }
+    .controls {
+      margin-top: 16px;
+      text-align: center;
+      color: #666;
+      font-size: 0.85rem;
+      line-height: 1.6;
+    }
+    .controls span {
+      color: #f5c518;
+      font-weight: 600;
+    }
+    .disclaimer {
+      margin-top: 12px;
+      font-size: 0.7rem;
+      color: #444;
+    }
+  </style>
+</head>
+<body>
+  <h1>BATMAN</h1>
+  <div class="subtitle">Gotham Nights — Unofficial Fan Game</div>
+  <canvas id="game" width="900" height="500"></canvas>
+  <div class="controls">
+    <span>A / ←</span> Move Left &nbsp;|&nbsp;
+    <span>D / →</span> Move Right &nbsp;|&nbsp;
+    <span>W / Space</span> Jump &nbsp;|&nbsp;
+    <span>J / X</span> Throw Batarang<br>
+    Defeat thugs • Collect bats for score • Survive as long as you can
+  </div>
+  <div class="disclaimer">Fan-made project. Not affiliated with DC Comics or Warner Bros.</div>
+
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+
+    // ========== GAME STATE ==========
+    let gameState = 'start'; // start | playing | gameover
+    let score = 0;
+    let lives = 3;
+    let cameraX = 0;
+    let frame = 0;
+    let spawnTimer = 0;
+    let batSpawnTimer = 0;
+
+
+    // Input
+    const keys = {};
+    window.addEventListener('keydown', e => {
+      keys[e.code] = true;
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        e.preventDefault();
+      }
+      if (gameState === 'start' && (e.code === 'Space' || e.code === 'Enter')) {
+        startGame();
+      }
+      if (gameState === 'gameover' && (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR')) {
+        startGame();
+      }
+    });
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+
+    // ========== PLAYER (BATMAN) ==========
+    const player = {
+      x: 150,
+      y: 300,
+      w: 36,
+      h: 48,
+      vx: 0,
+      vy: 0,
+      speed: 5.2,
+      jumpPower: -13.5,
+      onGround: false,
+      facing: 1, // 1 right, -1 left
+      invincible: 0,
+      throwCooldown: 0
+    };
+
+
+    // ========== WORLD ==========
+    let platforms = [];
+    let enemies = [];
+    let batarangs = [];
+    let collectibles = []; // floating bats
+    let particles = [];
+
+
+    function createPlatform(x, y, w, h = 18) {
+      return { x, y, w, h };
+    }
+
+
+    function resetWorld() {
+      platforms = [
+        createPlatform(-100, 420, 1400), // main ground
+        createPlatform(200, 340, 160),
+        createPlatform(450, 280, 140),
+        createPlatform(700, 320, 180),
+        createPlatform(1000, 250, 150),
+        createPlatform(1250, 360, 200),
+        createPlatform(1550, 300, 160),
+        createPlatform(1850, 220, 180),
+        createPlatform(2200, 340, 220),
+        createPlatform(2550, 270, 150),
+        createPlatform(2850, 380, 300)
+      ];
+      enemies = [];
+      batarangs = [];
+      collectibles = [];
+      particles = [];
+      cameraX = 0;
+      player.x = 120;
+      player.y = 300;
+      player.vx = 0;
+      player.vy = 0;
+      player.facing = 1;
+      player.invincible = 0;
+      player.throwCooldown = 0;
+      score = 0;
+      lives = 3;
+      spawnTimer = 0;
+      batSpawnTimer = 0;
+      frame = 0;
+    }
+
+
+    function startGame() {
+      resetWorld();
+      gameState = 'playing';
+    }
+
+
+    // ========== DRAWING HELPERS ==========
+    function drawBatman(x, y, facing) {
+      ctx.save();
+      ctx.translate(x + player.w / 2, y + player.h / 2);
+      ctx.scale(facing, 1);
+
+
+      // Cape
+      ctx.fillStyle = '#0a0a12';
+      ctx.beginPath();
+      ctx.moveTo(-8, -5);
+      ctx.quadraticCurveTo(-28, 10, -22, 28);
+      ctx.lineTo(8, 28);
+      ctx.quadraticCurveTo(5, 5, 8, -5);
+      ctx.closePath();
+      ctx.fill();
+
+
+      // Body
+      ctx.fillStyle = '#111118';
+      ctx.fillRect(-10, -12, 20, 32);
+
+
+      // Head
+      ctx.fillStyle = '#0d0d14';
+      ctx.beginPath();
+      ctx.ellipse(0, -18, 11, 12, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+
+      // Ears
+      ctx.fillStyle = '#0a0a10';
+      ctx.beginPath();
+      ctx.moveTo(-8, -26);
+      ctx.lineTo(-11, -40);
+      ctx.lineTo(-3, -28);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(8, -26);
+      ctx.lineTo(11, -40);
+      ctx.lineTo(3, -28);
+      ctx.closePath();
+      ctx.fill();
+
+
+      // Eyes (white slits)
+      ctx.fillStyle = '#e8e8f0';
+      ctx.fillRect(-7, -20, 5, 3);
+      ctx.fillRect(2, -20, 5, 3);
+
+
+      // Yellow utility belt
+      ctx.fillStyle = '#f5c518';
+      ctx.fillRect(-11, 8, 22, 5);
+      ctx.fillStyle = '#111';
+      ctx.fillRect(-2, 8, 4, 5);
+
+
+      // Bat symbol on chest
+      ctx.fillStyle = '#f5c518';
+      ctx.beginPath();
+      ctx.moveTo(0, -2);
+      ctx.lineTo(-6, 4);
+      ctx.lineTo(-3, 2);
+      ctx.lineTo(0, 6);
+      ctx.lineTo(3, 2);
+      ctx.lineTo(6, 4);
+      ctx.closePath();
+      ctx.fill();
+
+
+      ctx.restore();
+    }
+
+
+    function drawThug(x, y, facing) {
+      ctx.save();
+      ctx.translate(x + 16, y + 20);
+      ctx.scale(facing, 1);
+
+
+      // Body
+      ctx.fillStyle = '#3a2a2a';
+      ctx.fillRect(-10, -8, 20, 28);
+
+
+      // Head
+      ctx.fillStyle = '#c4a080';
+      ctx.beginPath();
+      ctx.arc(0, -16, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+
+      // Eyes
+      ctx.fillStyle = '#111';
+      ctx.fillRect(-5, -18, 3, 3);
+      ctx.fillRect(2, -18, 3, 3);
+
+
+      // Arms
+      ctx.fillStyle = '#3a2a2a';
+      ctx.fillRect(-16, -4, 8, 6);
+      ctx.fillRect(8, -4, 8, 6);
+
+
+      // Legs
+      ctx.fillRect(-8, 20, 6, 14);
+      ctx.fillRect(2, 20, 6, 14);
+
+
+      ctx.restore();
+    }
+
+
+    function drawBatarang(b) {
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.rotate(b.angle);
+      ctx.fillStyle = '#222';
+      ctx.beginPath();
+      ctx.moveTo(0, -6);
+      ctx.lineTo(10, 0);
+      ctx.lineTo(0, 6);
+      ctx.lineTo(-8, 2);
+      ctx.lineTo(-4, 0);
+      ctx.lineTo(-8, -2);
+      ctx.closePath();
+      ctx.fill();
+      // yellow accent
+      ctx.fillStyle = '#f5c518';
+      ctx.beginPath();
+      ctx.arc(0, 0, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      b.angle += 0.4 * Math.sign(b.vx);
+    }
+
+
+    function drawBatCollectible(c) {
+      ctx.save();
+      ctx.translate(c.x, c.y + Math.sin(frame * 0.08 + c.x) * 4);
+      ctx.fillStyle = '#f5c518';
+      // simple bat shape
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(-12, -8, -18, 2);
+      ctx.quadraticCurveTo(-10, -2, -6, 4);
+      ctx.lineTo(0, 2);
+      ctx.lineTo(6, 4);
+      ctx.quadraticCurveTo(10, -2, 18, 2);
+      ctx.quadraticCurveTo(12, -8, 0, 0);
+      ctx.fill();
+      ctx.restore();
+    }
+
+
+    function drawBackground() {
+      // sky gradient
+      const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      grad.addColorStop(0, '#050510');
+      grad.addColorStop(0.6, '#0c0c18');
+      grad.addColorStop(1, '#151520');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+
+      // distant buildings (parallax)
+      ctx.fillStyle = '#0a0a12';
+      for (let i = 0; i < 20; i++) {
+        const bx = ((i * 180 - cameraX * 0.3) % (canvas.width + 200)) - 100;
+        const bh = 80 + (i % 5) * 30;
+        ctx.fillRect(bx, canvas.height - bh - 80, 70 + (i % 3) * 20, bh);
+        // windows
+        ctx.fillStyle = '#1a1a28';
+        for (let wy = 10; wy < bh - 20; wy += 18) {
+          for (let wx = 8; wx < 60; wx += 14) {
+            if (Math.random() > 0.4) ctx.fillRect(bx + wx, canvas.height - bh - 80 + wy, 6, 8);
+          }
+        }
+        ctx.fillStyle = '#0a0a12';
+      }
+
+
+      // moon
+      ctx.fillStyle = '#d0d0e0';
+      ctx.beginPath();
+      ctx.arc(canvas.width - 100, 70, 28, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#050510';
+      ctx.beginPath();
+      ctx.arc(canvas.width - 88, 62, 24, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+
+    function drawUI() {
+      // Score
+      ctx.fillStyle = '#f5c518';
+      ctx.font = 'bold 22px system-ui';
+      ctx.fillText(`SCORE  ${score}`, 20, 36);
+
+
+      // Lives
+      ctx.fillStyle = '#e0e0e0';
+      ctx.font = '18px system-ui';
+      ctx.fillText(`LIVES  ${'♥'.repeat(lives)}`, 20, 64);
+
+
+      // Distance indicator (subtle)
+      ctx.fillStyle = '#444';
+      ctx.font = '14px system-ui';
+      ctx.fillText(`Gotham • ${Math.floor(cameraX / 50)}m`, canvas.width - 140, 30);
+    }
+
+
+    // ========== PHYSICS & UPDATE ==========
+    function rectCollide(a, b) {
+      return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+
+    function updatePlayer() {
+      // Horizontal movement
+      player.vx = 0;
+      if (keys['KeyA'] || keys['ArrowLeft']) {
+        player.vx = -player.speed;
+        player.facing = -1;
+      }
+      if (keys['KeyD'] || keys['ArrowRight']) {
+        player.vx = player.speed;
+        player.facing = 1;
+      }
+
+
+      // Jump
+      if ((keys['KeyW'] || keys['Space'] || keys['ArrowUp']) && player.onGround) {
+        player.vy = player.jumpPower;
+        player.onGround = false;
+      }
+
+
+      // Throw batarang
+      if ((keys['KeyJ'] || keys['KeyX']) && player.throwCooldown <= 0) {
+        batarangs.push({
+          x: player.x + player.w / 2,
+          y: player.y + player.h / 2 - 5,
+          vx: 14 * player.facing,
+          vy: 0,
+          angle: 0,
+          life: 90
+        });
+        player.throwCooldown = 22;
+      }
+      if (player.throwCooldown > 0) player.throwCooldown--;
+
+
+      // Gravity
+      player.vy += 0.65;
+      if (player.vy > 16) player.vy = 16;
+
+
+      // Apply velocity
+      player.x += player.vx;
+      player.y += player.vy;
+
+
+      // Platform collision
+      player.onGround = false;
+      for (const p of platforms) {
+        if (rectCollide(player, p)) {
+          // landing on top
+          if (player.vy > 0 && player.y + player.h - player.vy <= p.y + 8) {
+            player.y = p.y - player.h;
+            player.vy = 0;
+            player.onGround = true;
+          }
+          // hitting from below
+          else if (player.vy < 0 && player.y - player.vy >= p.y + p.h - 8) {
+            player.y = p.y + p.h;
+            player.vy = 0;
+          }
+          // side collisions
+          else if (player.vx > 0) {
+            player.x = p.x - player.w;
+          } else if (player.vx < 0) {
+            player.x = p.x + p.w;
+          }
+        }
+      }
+
+
+      // Keep player from falling forever
+      if (player.y > canvas.height + 100) {
+        hurtPlayer();
+        player.y = 200;
+        player.vy = 0;
+        player.x = Math.max(player.x - 100, 50);
+      }
+
+
+      // Camera follow
+      const targetCam = player.x - 280;
+      cameraX += (targetCam - cameraX) * 0.12;
+      if (cameraX < 0) cameraX = 0;
+
+
+      if (player.invincible > 0) player.invincible--;
+    }
+
+
+    function hurtPlayer() {
+      if (player.invincible > 0) return;
+      lives--;
+      player.invincible = 90;
+      // knockback
+      player.vy = -8;
+      player.vx = -player.facing * 6;
+      if (lives <= 0) {
+        gameState = 'gameover';
+      }
+    }
+
+
+    function spawnEnemies() {
+      spawnTimer++;
+      if (spawnTimer > 90 + Math.random() * 60) {
+        spawnTimer = 0;
+        const rightEdge = cameraX + canvas.width + 80;
+        // only spawn if near platforms
+        const nearPlatform = platforms.some(p => Math.abs(p.x + p.w / 2 - rightEdge) < 300);
+        if (nearPlatform || Math.random() > 0.4) {
+          enemies.push({
+            x: rightEdge + Math.random() * 100,
+            y: 300,
+            w: 32,
+            h: 40,
+            vx: -1.2 - Math.random() * 1.5,
+            facing: -1,
+            health: 1
+          });
+        }
+      }
+    }
+
+
+    function spawnCollectibles() {
+      batSpawnTimer++;
+      if (batSpawnTimer > 140) {
+        batSpawnTimer = 0;
+        collectibles.push({
+          x: cameraX + canvas.width + 40 + Math.random() * 200,
+          y: 120 + Math.random() * 200,
+          w: 24,
+          h: 16,
+          collected: false
+        });
+      }
+    }
+
+
+    function updateEnemies() {
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        e.x += e.vx;
+        e.facing = e.vx < 0 ? -1 : 1;
+
+
+        // simple gravity + platform
+        e.vy = (e.vy || 0) + 0.6;
+        e.y += e.vy;
+        for (const p of platforms) {
+          if (rectCollide(e, p) && e.vy > 0) {
+            e.y = p.y - e.h;
+            e.vy = 0;
+          }
+        }
+
+
+        // collide with player
+        if (rectCollide(player, e) && player.invincible <= 0) {
+          hurtPlayer();
+        }
+
+
+        // off screen left
+        if (e.x + e.w < cameraX - 50) {
+          enemies.splice(i, 1);
+        }
+      }
+    }
+
+
+    function updateBatarangs() {
+      for (let i = batarangs.length - 1; i >= 0; i--) {
+        const b = batarangs[i];
+        b.x += b.vx;
+        b.y += b.vy;
+        b.life--;
+
+
+        // hit enemies
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          const e = enemies[j];
+          if (b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
+            // hit!
+            score += 150;
+            // particles
+            for (let k = 0; k < 8; k++) {
+              particles.push({
+                x: e.x + 16,
+                y: e.y + 20,
+                vx: (Math.random() - 0.5) * 8,
+                vy: (Math.random() - 0.5) * 8,
+                life: 30 + Math.random() * 20,
+                color: '#c44'
+              });
+            }
+            enemies.splice(j, 1);
+            batarangs.splice(i, 1);
+            break;
+          }
+        }
+
+
+        if (b.life <= 0 || b.x < cameraX - 50 || b.x > cameraX + canvas.width + 50) {
+          batarangs.splice(i, 1);
+        }
+      }
+    }
+
+
+    function updateCollectibles() {
+      for (let i = collectibles.length - 1; i >= 0; i--) {
+        const c = collectibles[i];
+        if (rectCollide(player, c)) {
+          score += 50;
+          // sparkle particles
+          for (let k = 0; k < 6; k++) {
+            particles.push({
+              x: c.x,
+              y: c.y,
+              vx: (Math.random() - 0.5) * 5,
+              vy: (Math.random() - 0.5) * 5,
+              life: 25,
+              color: '#f5c518'
+            });
+          }
+          collectibles.splice(i, 1);
+        } else if (c.x < cameraX - 50) {
+          collectibles.splice(i, 1);
+        }
+      }
+    }
+
+
+    function updateParticles() {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.15;
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+    }
+
+
+    // Generate more platforms as player advances
+    function extendWorld() {
+      const last = platforms[platforms.length - 1];
+      if (last && player.x > last.x - 800) {
+        const nextX = last.x + last.w + 80 + Math.random() * 120;
+        const nextY = 200 + Math.random() * 180;
+        const nextW = 120 + Math.random() * 160;
+        platforms.push(createPlatform(nextX, nextY, nextW));
+        // sometimes add a second higher one
+        if (Math.random() > 0.6) {
+          platforms.push(createPlatform(nextX + 40, nextY - 90 - Math.random() * 40, 100 + Math.random() * 80));
+        }
+      }
+      // cleanup old platforms
+      platforms = platforms.filter(p => p.x + p.w > cameraX - 200);
+    }
+
+
+    // ========== MAIN LOOP ==========
+    function update() {
+      if (gameState !== 'playing') return;
+
+
+      frame++;
+      updatePlayer();
+      spawnEnemies();
+      spawnCollectibles();
+      updateEnemies();
+      updateBatarangs();
+      updateCollectibles();
+      updateParticles();
+      extendWorld();
+
+
+      // small score for distance
+      if (frame % 30 === 0) score += 1;
+    }
+
+
+    function draw() {
+      drawBackground();
+
+
+      // platforms
+      ctx.fillStyle = '#1a1a24';
+      for (const p of platforms) {
+        const sx = p.x - cameraX;
+        if (sx + p.w < 0 || sx > canvas.width) continue;
+        ctx.fillRect(sx, p.y, p.w, p.h);
+        // top edge highlight
+        ctx.fillStyle = '#2a2a38';
+        ctx.fillRect(sx, p.y, p.w, 4);
+        ctx.fillStyle = '#1a1a24';
+      }
+
+
+      // collectibles
+      for (const c of collectibles) {
+        drawBatCollectible(c.x - cameraX, c.y);
+      }
+
+
+      // enemies
+      for (const e of enemies) {
+        drawThug(e.x - cameraX, e.y, e.facing);
+      }
+
+
+      // batarangs
+      for (const b of batarangs) {
+        drawBatarang({ ...b, x: b.x - cameraX });
+      }
+
+
+      // particles
+      for (const p of particles) {
+        ctx.globalAlpha = Math.min(1, p.life / 20);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - cameraX, p.y, 4, 4);
+        ctx.globalAlpha = 1;
+      }
+
+
+      // player (with invincibility flash)
+      if (player.invincible <= 0 || Math.floor(player.invincible / 4) % 2 === 0) {
+        drawBatman(player.x - cameraX, player.y, player.facing);
+      }
+
+
+      drawUI();
+
+
+      // Start screen
+      if (gameState === 'start') {
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#f5c518';
+        ctx.font = 'bold 48px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('BATMAN', canvas.width / 2, 180);
+        ctx.font = '20px system-ui';
+        ctx.fillStyle = '#ccc';
+        ctx.fillText('GOTHAM NIGHTS', canvas.width / 2, 220);
+        ctx.font = '18px system-ui';
+        ctx.fillStyle = '#888';
+        ctx.fillText('Press SPACE or ENTER to start', canvas.width / 2, 300);
+        ctx.textAlign = 'left';
+      }
+
+
+      // Game over
+      if (gameState === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#c33';
+        ctx.font = 'bold 42px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', canvas.width / 2, 190);
+        ctx.fillStyle = '#f5c518';
+        ctx.font = '24px system-ui';
+        ctx.fillText(`Final Score: ${score}`, canvas.width / 2, 250);
+        ctx.fillStyle = '#aaa';
+        ctx.font = '18px system-ui';
+        ctx.fillText('Press SPACE / R to try again', canvas.width / 2, 310);
+        ctx.textAlign = 'left';
+      }
+    }
+
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+
+    // Start
+    loop();
+  </script>
+</body>
+</html>
